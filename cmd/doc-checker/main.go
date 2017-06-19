@@ -19,6 +19,16 @@ type provider struct {
 	resources   []string
 }
 
+func checkFileExists(p, name string, extensions []string) (string, bool) {
+	for _, ext := range extensions {
+		pa := path.Join(p, fmt.Sprintf("%s.%s", name, ext))
+		if err := fileExists(pa); err == nil {
+			return pa, true
+		}
+	}
+	return "", false
+}
+
 func main() {
 	var providerName = flag.String("provider-name", "", "prefix name of the provider")
 	var providerPath = flag.String("provider-path", "", "path to the terraform provider to check")
@@ -36,40 +46,55 @@ func main() {
 	}
 	log.Printf("%#v\n", prov)
 
+	resourceBasePath := path.Join(*providerPath, "..", "website", "docs", "r")
 	for _, r := range prov.resources {
-		resourceFile := fmt.Sprintf("%s.html.markdown", r[len(*providerName)+1:])
-		resourcePath := path.Join(*providerPath, "..", "website", "docs", "r", resourceFile)
-		if err := fileExists(resourcePath); err != nil {
-			log.Printf("resource documentation %q is missing at %q", resourceFile, resourcePath)
+		resourceFile := r[len(*providerName)+1:]
+		resourcePath, ok := checkFileExists(resourceBasePath, resourceFile, []string{"md", "markdown", "html.md", "html.markdown"})
+		if !ok {
+			log.Printf("resource documentation %q is missing at %q", resourceFile, resourceBasePath)
 			continue
 		}
 
 		verifyResourceAttributes(
-			path.Join(*providerPath, fmt.Sprintf("resource_%s.go", r)),
+			*providerPath,
+			[]string{fmt.Sprintf("resource_%s.go", r), fmt.Sprintf("resource_%s.go", r[len(*providerName)+1:])},
 			resourcePath,
 		)
 	}
 
+	datasourceBasePath := path.Join(*providerPath, "..", "website", "docs", "d")
 	for _, ds := range prov.datasources {
-		datasourceFile := fmt.Sprintf("%s.html.markdown", ds[len(*providerName)+1:])
-		datasourcePath := path.Join(*providerPath, "..", "website", "docs", "d", datasourceFile)
-		if err := fileExists(datasourcePath); err != nil {
-			log.Printf("resource documentation %q is missing at %q", datasourceFile, datasourcePath)
+		datasourceFile := ds[len(*providerName)+1:]
+		datasourcePath, ok := checkFileExists(datasourceBasePath, datasourceFile, []string{"md", "markdown", "html.md", "html.markdown"})
+		if !ok {
+			log.Printf("resource documentation %q is missing at %q", datasourceFile, datasourceBasePath)
 			continue
 		}
 
 		verifyResourceAttributes(
-			path.Join(*providerPath, fmt.Sprintf("data_source_%s.go", ds)),
+			*providerPath,
+			[]string{fmt.Sprintf("data_source_%s.go", ds), fmt.Sprintf("data_source_%s.go", ds[len(*providerName)+1:])},
 			datasourcePath,
 		)
 	}
 }
 
-func verifyResourceAttributes(sourceFile, docFile string) {
+func verifyResourceAttributes(sourcePath string, candidates []string, docFile string) {
+	sourceFile := ""
+	for _, candidate := range candidates {
+		if err := fileExists(path.Join(sourcePath, candidate)); err == nil {
+			sourceFile = path.Join(sourcePath, candidate)
+			break
+		}
+	}
+	if sourceFile == "" {
+		log.Printf("Failed to find candidate for %s\n", candidates)
+		return
+	}
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, sourceFile, nil, parser.ParseComments)
 	if err != nil {
-		log.Printf("Failed to parse %s", sourceFile)
+		log.Printf("Failed to parse %s: %s\n", sourceFile, err)
 		return
 	}
 
@@ -118,12 +143,20 @@ func verifyResourceAttributes(sourceFile, docFile string) {
 			for _, elt := range schemaElt.Elts {
 				eltt, ok := elt.(*ast.KeyValueExpr)
 				if !ok {
+					log.Printf("ignoring…\n")
 					continue
 				}
 
 				expectedMarkup := fmt.Sprintf("* `%s`", decodeString(eltt.Key.(*ast.BasicLit).Value))
 				if !bytes.Contains(docset, []byte(expectedMarkup)) {
 					log.Printf("Missing %q in %q\n", expectedMarkup, docFile)
+				}
+
+				if elv, ok := eltt.Value.(*ast.CompositeLit); ok {
+					for _, elv := range elv.Elts {
+						elvv := elv.(*ast.KeyValueExpr)
+						log.Printf("%s: %#v\n", decodeString(eltt.Key.(*ast.BasicLit).Value), elvv.Key.(*ast.Ident).Name)
+					}
 				}
 			}
 		}
