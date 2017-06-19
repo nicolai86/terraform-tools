@@ -12,6 +12,7 @@ import (
 	"os"
 	"path"
 	"reflect"
+	"strings"
 )
 
 type provider struct {
@@ -64,7 +65,12 @@ func main() {
 
 	datasourceBasePath := path.Join(*providerPath, "..", "website", "docs", "d")
 	for _, ds := range prov.datasources {
-		datasourceFile := ds[len(*providerName)+1:]
+		datasourceFile := ds
+		dataSourceNames := []string{fmt.Sprintf("data_source_%s.go", ds)}
+		if strings.HasPrefix(ds, fmt.Sprintf("%s_", *providerName)) {
+			datasourceFile = ds[len(*providerName)+1:]
+			dataSourceNames = append(dataSourceNames, fmt.Sprintf("data_source_%s.go", ds[len(*providerName)+1:]))
+		}
 		datasourcePath, ok := checkFileExists(datasourceBasePath, datasourceFile, []string{"md", "markdown", "html.md", "html.markdown"})
 		if !ok {
 			log.Printf("resource documentation %q is missing at %q", datasourceFile, datasourceBasePath)
@@ -73,7 +79,7 @@ func main() {
 
 		verifyResourceAttributes(
 			*providerPath,
-			[]string{fmt.Sprintf("data_source_%s.go", ds), fmt.Sprintf("data_source_%s.go", ds[len(*providerName)+1:])},
+			dataSourceNames,
 			datasourcePath,
 		)
 	}
