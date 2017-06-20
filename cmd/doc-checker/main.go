@@ -116,6 +116,12 @@ func verifyResourceAttributes(sourcePath string, candidates []string, docFile st
 		if !ok {
 			continue
 		}
+		if fncDecl.Type == nil {
+			continue
+		}
+		if fncDecl.Type.Results == nil {
+			continue
+		}
 		if len(fncDecl.Type.Results.List) != 1 {
 			log.Printf("Ignoring %s because arity doesn't match\n", fncDecl.Name.String())
 			continue
