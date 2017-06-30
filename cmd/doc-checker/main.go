@@ -27,16 +27,6 @@ type provider struct {
 	resources   []resourceDefinition
 }
 
-func checkFileExists(p, name string, extensions []string) (string, bool) {
-	for _, ext := range extensions {
-		pa := path.Join(p, fmt.Sprintf("%s.%s", name, ext))
-		if err := fileExists(pa); err == nil {
-			return pa, true
-		}
-	}
-	return "", false
-}
-
 // documentation contains all documentation for datasources, resources, indexed by name.
 // provider prefixes have been removed, if a datasource or resource is missing either
 // the documentation is missing or the file didn't allow classification.
@@ -79,7 +69,7 @@ func loadDocumentation(providerName, root string, extensions []string) (document
 			return err
 		}
 
-		docName, docType, err := classifyDoc(providerName, docset)
+		docName, docType, err := classifyDoc(providerName, path, docset)
 		if err != nil {
 			log.Printf("Ignoring %q due to %v", path, err)
 			return nil
@@ -95,7 +85,7 @@ func loadDocumentation(providerName, root string, extensions []string) (document
 	})
 }
 
-func classifyDoc(providerName string, content []byte) (string, docType, error) {
+func classifyDoc(providerName, path string, content []byte) (string, docType, error) {
 	scanner := bufio.NewScanner(bytes.NewReader(content))
 	var t docType
 	var n string
@@ -106,24 +96,45 @@ func classifyDoc(providerName string, content []byte) (string, docType, error) {
 		if !strings.Contains(line, "sidebar_current") {
 			continue
 		}
-
-		if strings.Contains(line, "datasource") {
+		parts := strings.Split(line, ": ")
+		line = parts[1][1 : len(parts[1])-1]
+		log.Printf("%#v\n", parts)
+		if strings.HasPrefix(line, "docs-") {
+			line = line[5:]
+		}
+		if strings.HasPrefix(line, providerName+"-") {
+			line = line[len(providerName)+1:]
+		}
+		if strings.Contains(line, "datasource") || strings.Contains(line, "data-source") || strings.Contains(path, "/d/") || strings.Contains(path, "data_source") {
 			t = docTypeDatasource
-			i := strings.LastIndex(line, "datasource-")
-			n = line[i+len("datasource-") : len(line)-1]
+			if strings.HasPrefix(line, "datasource-") {
+				line = line[11:]
+			}
+			if strings.Contains(line, "datasource-") {
+				idx := strings.LastIndex(line, "datasource-")
+				line = line[idx+11:]
+			}
+
+			n = line[:]
 			break
 		}
-		if strings.Contains(line, "resource") {
+		if strings.Contains(line, "resource") || strings.Contains(path, "/r/") {
 			t = docTypeResource
-			i := strings.LastIndex(line, "resource-")
-			n = line[i+len("resource-") : len(line)-1]
+			if strings.HasPrefix(line, "resource-") {
+				line = line[9:]
+			}
+			if strings.Contains(line, "resource-") {
+				idx := strings.LastIndex(line, "resource-")
+				line = line[idx+9:]
+			}
+			n = line[:]
 			break
 		}
 	}
 	if n == "" {
 		err = fmt.Errorf("could not find sidebar_current")
 	} else {
-		n = providerName + "_" + strings.Replace(n, " ", "_", -1)
+		n = providerName + "_" + strings.Replace(strings.Replace(n, " ", "_", -1), "-", "_", -1)
 	}
 	return n, t, err
 }
@@ -237,7 +248,12 @@ func verifyAttributes(path string, prov provider, docs documentation) {
 		_ = schemaType
 		_ = schemaName
 
-		for _, elt := range fncDecl.Body.List[0].(*ast.ReturnStmt).Results[0].(*ast.UnaryExpr).X.(*ast.CompositeLit).Elts {
+		retExp, ok := fncDecl.Body.List[0].(*ast.ReturnStmt)
+		if !ok {
+			log.Printf("TODO structure of %v does not allow parsing yet\n", fncDecl.Name.Name)
+			continue
+		}
+		for _, elt := range retExp.Results[0].(*ast.UnaryExpr).X.(*ast.CompositeLit).Elts {
 			eltt, ok := elt.(*ast.KeyValueExpr)
 			if !ok {
 				continue
@@ -247,7 +263,10 @@ func verifyAttributes(path string, prov provider, docs documentation) {
 			}
 
 			// TODO parse recursive maps, sets, etc
-			schemaElt := eltt.Value.(*ast.CompositeLit)
+			schemaElt, ok := eltt.Value.(*ast.CompositeLit)
+			if !ok {
+				continue
+			}
 			for _, elt := range schemaElt.Elts {
 				eltt, ok := elt.(*ast.KeyValueExpr)
 				if !ok {
