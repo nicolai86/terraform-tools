@@ -40,7 +40,14 @@ type docType int
 var (
 	docTypeDatasource docType = 0
 	docTypeResource   docType = 1
+	debug             *bool
 )
+
+func Debugf(format string, a ...interface{}) {
+	if *debug {
+		log.Printf(format, a...)
+	}
+}
 
 func loadDocumentation(providerName, root string, extensions []string) (documentation, error) {
 	d := documentation{
@@ -71,7 +78,7 @@ func loadDocumentation(providerName, root string, extensions []string) (document
 
 		docName, docType, err := classifyDoc(providerName, path, docset)
 		if err != nil {
-			log.Printf("Ignoring %q due to %v", path, err)
+			Debugf("Ignoring %q due to %v", path, err)
 			return nil
 		}
 
@@ -98,7 +105,7 @@ func classifyDoc(providerName, path string, content []byte) (string, docType, er
 		}
 		parts := strings.Split(line, ": ")
 		line = parts[1][1 : len(parts[1])-1]
-		log.Printf("%#v\n", parts)
+		Debugf("%#v\n", parts)
 		if strings.HasPrefix(line, "docs-") {
 			line = line[5:]
 		}
@@ -142,6 +149,7 @@ func classifyDoc(providerName, path string, content []byte) (string, docType, er
 func main() {
 	var providerName = flag.String("provider-name", "", "prefix name of the provider")
 	var providerPath = flag.String("provider-path", "", "path to the terraform provider to check")
+	debug = flag.Bool("debug", false, "enable debug output")
 	flag.Parse()
 
 	if providerPath == nil || *providerPath == "" || providerName == nil || *providerName == "" {
@@ -154,19 +162,19 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to parse the provider: %q", err)
 	}
-	log.Printf("%#v\n", prov)
+	Debugf("%#v\n", prov)
 
 	docs, err := loadDocumentation(*providerName, path.Join(*providerPath, "..", "website"), []string{"md", "markdown", "html.md", "html.markdown"})
 	if err != nil {
 		log.Fatalf("Failed to load docs: %v", err)
 	}
-	log.Printf("Datasources:\n")
+	Debugf("Datasources:\n")
 	for k, v := range docs.Datasources {
-		log.Printf("docs of %q: %d\n", k, len(v))
+		Debugf("docs of %q: %d\n", k, len(v))
 	}
-	log.Printf("Resources:\n")
+	Debugf("Resources:\n")
 	for k, v := range docs.Resources {
-		log.Printf("docs of %q: %d\n", k, len(v))
+		Debugf("docs of %q: %d\n", k, len(v))
 	}
 
 	filepath.Walk(*providerPath, func(path string, info os.FileInfo, err error) error {
@@ -176,7 +184,6 @@ func main() {
 		if !strings.HasSuffix(path, ".go") {
 			return nil
 		}
-		log.Printf("TODO parse %q\n", path)
 		verifyAttributes(path, prov, docs)
 		return nil
 	})
@@ -203,12 +210,12 @@ func verifyAttributes(path string, prov provider, docs documentation) {
 			continue
 		}
 		if len(fncDecl.Type.Results.List) != 1 {
-			log.Printf("Ignoring %s because arity doesn't match\n", fncDecl.Name.String())
+			Debugf("Ignoring %s because arity doesn't match\n", fncDecl.Name.String())
 			continue
 		}
 		retExpr, ok := fncDecl.Type.Results.List[0].Type.(*ast.StarExpr)
 		if !ok {
-			log.Printf("Ignoring %q because return type %q doesn't match %q\n", fncDecl.Name.String(), reflect.TypeOf(fncDecl.Type.Results.List[0].Type), "*ast.StarExpr")
+			Debugf("Ignoring %q because return type %q doesn't match %q\n", fncDecl.Name.String(), reflect.TypeOf(fncDecl.Type.Results.List[0].Type), "*ast.StarExpr")
 			continue
 		}
 		selExpr, ok := retExpr.X.(*ast.SelectorExpr)
@@ -242,7 +249,7 @@ func verifyAttributes(path string, prov provider, docs documentation) {
 			}
 		}
 		if !found {
-			log.Printf("Could not find matching datasource or resource for %v\n", fncDecl.Name.Name)
+			Debugf("Could not find matching datasource or resource for %v\n", fncDecl.Name.Name)
 			continue
 		}
 		_ = schemaType
@@ -250,7 +257,7 @@ func verifyAttributes(path string, prov provider, docs documentation) {
 
 		retExp, ok := fncDecl.Body.List[0].(*ast.ReturnStmt)
 		if !ok {
-			log.Printf("TODO structure of %v does not allow parsing yet\n", fncDecl.Name.Name)
+			Debugf("TODO structure of %v does not allow parsing yet\n", fncDecl.Name.Name)
 			continue
 		}
 		for _, elt := range retExp.Results[0].(*ast.UnaryExpr).X.(*ast.CompositeLit).Elts {
@@ -270,7 +277,7 @@ func verifyAttributes(path string, prov provider, docs documentation) {
 			for _, elt := range schemaElt.Elts {
 				eltt, ok := elt.(*ast.KeyValueExpr)
 				if !ok {
-					log.Printf("ignoring…\n")
+					Debugf("ignoring…\n")
 					continue
 				}
 
@@ -278,12 +285,12 @@ func verifyAttributes(path string, prov provider, docs documentation) {
 				name := ""
 				if basic, ok := eltt.Key.(*ast.BasicLit); ok {
 					name = basic.Value
-					expectedMarkup = fmt.Sprintf("* `%s`", decodeString(basic.Value))
+					expectedMarkup = fmt.Sprintf("`%s`", decodeString(basic.Value))
 				} else {
 					// TODO support constants defined elsewhere…
 					lit := eltt.Key.(*ast.Ident).Obj.Decl.(*ast.ValueSpec).Values[0].(*ast.BasicLit)
 					name = lit.Value
-					expectedMarkup = fmt.Sprintf("* `%s`", decodeString(lit.Value))
+					expectedMarkup = fmt.Sprintf("`%s`", decodeString(lit.Value))
 				}
 				if !bytes.Contains(docset, []byte(expectedMarkup)) {
 					log.Printf("Missing %q in docs of %q\n", expectedMarkup, schemaName)
@@ -357,7 +364,7 @@ func parseProviderDefinition(path string) (provider, error) {
 						})
 					}
 				default:
-					log.Printf("ignoring provider keys %#v\n", elttKey.Name)
+					Debugf("ignoring provider keys %#v\n", elttKey.Name)
 				}
 			}
 		}
