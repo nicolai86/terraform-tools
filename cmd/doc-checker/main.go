@@ -317,6 +317,75 @@ func fileExists(filePath string) error {
 	return err
 }
 
+type visitor struct {
+	*provider
+}
+
+func (v *visitor) Visit(node ast.Node) ast.Visitor {
+	if node == nil {
+		return nil
+	}
+	vs, ok := node.(*ast.FuncDecl)
+	if !ok {
+		return &typeV{v.provider}
+	}
+	if vs.Name.String() != "Provider" {
+		return &typeV{v.provider}
+	}
+	return &typeV{v.provider}
+}
+
+type typeV struct {
+	*provider
+}
+
+func (v *typeV) Visit(node ast.Node) ast.Visitor {
+	if node == nil {
+		return nil
+	}
+	_, ok := node.(*ast.ReturnStmt)
+	if !ok {
+		return &typeP{v.provider}
+	}
+	return &typeP{v.provider}
+}
+
+type typeP struct {
+	*provider
+}
+
+func (v *typeP) Visit(node ast.Node) ast.Visitor {
+	if node == nil {
+		return nil
+	}
+	ret, ok := node.(*ast.KeyValueExpr)
+	if !ok {
+		return v
+	}
+	elttKey := ret.Key.(*ast.Ident)
+	switch {
+	case elttKey.Name == "ResourcesMap":
+		elttValue := ret.Value.(*ast.CompositeLit)
+		for _, elttt := range elttValue.Elts {
+			eltttt := elttt.(*ast.KeyValueExpr)
+			v.provider.resources = append(v.provider.resources, resourceDefinition{
+				name: decodeString(eltttt.Key.(*ast.BasicLit).Value),
+				fnc:  eltttt.Value.(*ast.CallExpr).Fun.(*ast.Ident).Name,
+			})
+		}
+	case elttKey.Name == "DataSourcesMap":
+		elttValue := ret.Value.(*ast.CompositeLit)
+		for _, elttt := range elttValue.Elts {
+			eltttt := elttt.(*ast.KeyValueExpr)
+			v.provider.datasources = append(v.provider.datasources, resourceDefinition{
+				name: decodeString(eltttt.Key.(*ast.BasicLit).Value),
+				fnc:  eltttt.Value.(*ast.CallExpr).Fun.(*ast.Ident).Name,
+			})
+		}
+	}
+	return nil
+}
+
 // parseProviderDefinition takes a provider.go file and tries to extract the declared
 // datasources and resources from the AST
 func parseProviderDefinition(path string) (provider, error) {
@@ -326,48 +395,7 @@ func parseProviderDefinition(path string) (provider, error) {
 		return provider{}, err
 	}
 	p := provider{}
-	for _, decl := range f.Decls {
-		v, ok := decl.(*ast.FuncDecl)
-		if !ok {
-			continue
-		}
-		if v.Name.String() != "Provider" {
-			continue
-		}
-
-		for _, stmt := range v.Body.List {
-			ret, ok := stmt.(*ast.ReturnStmt)
-			if !ok {
-				continue
-			}
-			st := ret.Results[0].(*ast.UnaryExpr).X.(*ast.CompositeLit)
-
-			for _, elt := range st.Elts {
-				elttKey := elt.(*ast.KeyValueExpr).Key.(*ast.Ident)
-				switch {
-				case elttKey.Name == "ResourcesMap":
-					elttValue := elt.(*ast.KeyValueExpr).Value.(*ast.CompositeLit)
-					for _, elttt := range elttValue.Elts {
-						eltttt := elttt.(*ast.KeyValueExpr)
-						p.resources = append(p.resources, resourceDefinition{
-							name: decodeString(eltttt.Key.(*ast.BasicLit).Value),
-							fnc:  eltttt.Value.(*ast.CallExpr).Fun.(*ast.Ident).Name,
-						})
-					}
-				case elttKey.Name == "DataSourcesMap":
-					elttValue := elt.(*ast.KeyValueExpr).Value.(*ast.CompositeLit)
-					for _, elttt := range elttValue.Elts {
-						eltttt := elttt.(*ast.KeyValueExpr)
-						p.datasources = append(p.datasources, resourceDefinition{
-							name: decodeString(eltttt.Key.(*ast.BasicLit).Value),
-							fnc:  eltttt.Value.(*ast.CallExpr).Fun.(*ast.Ident).Name,
-						})
-					}
-				default:
-					Debugf("ignoring provider keys %#v\n", elttKey.Name)
-				}
-			}
-		}
-	}
+	ast.Walk(&visitor{&p}, f)
+	fmt.Printf("%#v", p)
 	return p, nil
 }
