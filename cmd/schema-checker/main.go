@@ -13,7 +13,8 @@ import (
 )
 
 var (
-	debug *bool
+	debug        *bool
+	providerPath *string
 )
 
 type schemaCheck func(string) schemaWalker
@@ -48,7 +49,7 @@ func docChecker(fset *token.FileSet, file string) schemaWalker {
 			hasDescription = hasDescription || name == "Description"
 		}
 		if !hasDescription {
-			fmt.Printf("%s:%#v %s\n", file, fset.Position(node.Pos()).Line, fmt.Sprintf("%s: Missing Description attribute", lit.Value))
+			fmt.Printf("%s:%#v %s\n", strings.Replace(file, *providerPath, "", -1), fset.Position(node.Pos()).Line, fmt.Sprintf("%s: Missing Description attribute", lit.Value))
 		}
 		return docChecker(fset, file)
 	}
@@ -127,8 +128,8 @@ func checkSchema(path string) {
 	ast.Walk(schemaFinder(fset, path), f)
 }
 
-func main() {
-	var providerPath = flag.String("provider-path", "", "path to the terraform provider to check")
+func init() {
+	providerPath = flag.String("provider-path", "", "path to the terraform provider to check")
 	debug = flag.Bool("debug", false, "enable debug output")
 	flag.Parse()
 
@@ -136,8 +137,9 @@ func main() {
 		flag.PrintDefaults()
 		os.Exit(1)
 	}
+}
 
-	log.Printf("checking schema for %q", *providerPath)
+func main() {
 	filepath.Walk(*providerPath, func(path string, info os.FileInfo, err error) error {
 		if strings.HasSuffix(path, "_test.go") {
 			return nil
