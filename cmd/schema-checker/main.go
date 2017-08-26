@@ -34,7 +34,7 @@ func docChecker(fset *token.FileSet, file string) schemaWalker {
 		if !ok {
 			return docChecker(fset, file)
 		}
-		_, ok = k.Key.(*ast.BasicLit)
+		lit, ok := k.Key.(*ast.BasicLit)
 		if !ok {
 			return nil
 		}
@@ -48,7 +48,7 @@ func docChecker(fset *token.FileSet, file string) schemaWalker {
 			hasDescription = hasDescription || name == "Description"
 		}
 		if !hasDescription {
-			fmt.Printf("%s:%#v %s", file, fset.Position(node.Pos()).Line, "Missing Description attribute")
+			fmt.Printf("%s:%#v %s\n", file, fset.Position(node.Pos()).Line, fmt.Sprintf("%s: Missing Description attribute", lit.Value))
 		}
 		return docChecker(fset, file)
 	}
