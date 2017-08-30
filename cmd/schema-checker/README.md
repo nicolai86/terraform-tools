@@ -5,6 +5,7 @@
 It checks that:
 
 - all your resources attributes have a `Description` set
+- you're not using reserved attribute names (like `id`)
 
 ## usage
 
