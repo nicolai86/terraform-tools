@@ -25,6 +25,37 @@ func (fn schemaWalker) Visit(node ast.Node) ast.Visitor {
 	return fn(node)
 }
 
+type checkFn func(attributeName string, def *ast.CompositeLit) error
+
+func checkFnFunc(fn func(attributeName string, def *ast.CompositeLit) error) checkFn {
+	return checkFn(fn)
+}
+
+func checkDescription(attributeName string, def *ast.CompositeLit) error {
+	hasDescription := false
+	for _, elt := range def.Elts {
+		name := elt.(*ast.KeyValueExpr).Key.(*ast.Ident).Name
+		hasDescription = hasDescription || name == "Description"
+	}
+	if hasDescription {
+		return nil
+	}
+	return fmt.Errorf("%s: Missing Description attribute", attributeName)
+
+}
+
+func checkAttributeName(attributeName string, def *ast.CompositeLit) error {
+	if attributeName == "id" {
+		return fmt.Errorf("%s: attribute name is reserved", attributeName)
+	}
+	return nil
+}
+
+var checks = []checkFn{
+	checkFnFunc(checkDescription),
+	checkFnFunc(checkAttributeName),
+}
+
 func docChecker(fset *token.FileSet, file string) schemaWalker {
 	return func(node ast.Node) ast.Visitor {
 		if node == nil {
@@ -39,18 +70,19 @@ func docChecker(fset *token.FileSet, file string) schemaWalker {
 		if !ok {
 			return nil
 		}
+
 		vs, ok := k.Value.(*ast.CompositeLit)
 		if !ok {
 			return docChecker(fset, file)
 		}
-		hasDescription := false
-		for _, elt := range vs.Elts {
-			name := elt.(*ast.KeyValueExpr).Key.(*ast.Ident).Name
-			hasDescription = hasDescription || name == "Description"
+
+		for _, check := range checks {
+			err := check(lit.Value, vs)
+			if err != nil {
+				fmt.Printf("%s:%#v %s\n", strings.Replace(file, *providerPath, "", -1), fset.Position(node.Pos()).Line, err.Error())
+			}
 		}
-		if !hasDescription {
-			fmt.Printf("%s:%#v %s\n", strings.Replace(file, *providerPath, "", -1), fset.Position(node.Pos()).Line, fmt.Sprintf("%s: Missing Description attribute", lit.Value))
-		}
+
 		return docChecker(fset, file)
 	}
 }
