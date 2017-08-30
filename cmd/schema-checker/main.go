@@ -25,13 +25,20 @@ func (fn schemaWalker) Visit(node ast.Node) ast.Visitor {
 	return fn(node)
 }
 
-type checkFn func(attributeName string, def *ast.CompositeLit) error
+func debugWalker() schemaWalker {
+	return schemaWalker(func(n ast.Node) ast.Visitor {
+		fmt.Printf("%#v\n", n)
+		return debugWalker()
+	})
+}
 
-func checkFnFunc(fn func(attributeName string, def *ast.CompositeLit) error) checkFn {
+type checkFn func(attributeName string, def *ast.CompositeLit, schema ast.Node) error
+
+func checkFnFunc(fn func(attributeName string, def *ast.CompositeLit, schema ast.Node) error) checkFn {
 	return checkFn(fn)
 }
 
-func checkDescription(attributeName string, def *ast.CompositeLit) error {
+func checkDescription(attributeName string, def *ast.CompositeLit, schema ast.Node) error {
 	hasDescription := false
 	for _, elt := range def.Elts {
 		name := elt.(*ast.KeyValueExpr).Key.(*ast.Ident).Name
@@ -44,7 +51,62 @@ func checkDescription(attributeName string, def *ast.CompositeLit) error {
 
 }
 
-func checkAttributeName(attributeName string, def *ast.CompositeLit) error {
+func collectAttributeNames(schema ast.Node) []string {
+	names := []string{}
+	ast.Walk(attributeCollector(&names), schema)
+	return names
+}
+
+func collectConflicts(node ast.Node) []string {
+	conflicts := []string{}
+	ast.Walk(debugWalker(), node)
+	return conflicts
+}
+
+func checkConflictsWith(attributeName string, def *ast.CompositeLit, schema ast.Node) error {
+	conflicts := []string{}
+
+	for _, elt := range def.Elts {
+		name := elt.(*ast.KeyValueExpr).Key.(*ast.Ident).Name
+		if name != "ConflictsWith" {
+			continue
+		}
+		for _, conflict := range elt.(*ast.KeyValueExpr).Value.(*ast.CompositeLit).Elts {
+			value := conflict.(*ast.BasicLit).Value
+			conflicts = append(conflicts, value[1:len(value)-1])
+		}
+	}
+
+	if len(conflicts) == 0 {
+		return nil
+	}
+	attributeNames := collectAttributeNames(schema)
+
+	errors := []error{}
+	for _, conflict := range conflicts {
+		_ = conflict
+		exists := false
+		for _, attribute := range attributeNames {
+			if attribute == conflict {
+				exists = true
+				break
+			}
+		}
+		if !exists {
+			errors = append(errors, fmt.Errorf("conflict target %q does not exist", conflict))
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	errorMessages := []string{}
+	for _, err := range errors {
+		errorMessages = append(errorMessages, err.Error())
+	}
+	return fmt.Errorf("%s: %s", attributeName, strings.Join(errorMessages, ", "))
+}
+
+func checkAttributeName(attributeName string, def *ast.CompositeLit, schema ast.Node) error {
 	if attributeName == "id" {
 		return fmt.Errorf("%s: attribute name is reserved", attributeName)
 	}
@@ -54,9 +116,10 @@ func checkAttributeName(attributeName string, def *ast.CompositeLit) error {
 var checks = []checkFn{
 	checkFnFunc(checkDescription),
 	checkFnFunc(checkAttributeName),
+	checkFnFunc(checkConflictsWith),
 }
 
-func docChecker(fset *token.FileSet, file string) schemaWalker {
+func attributeCollector(res *[]string) schemaWalker {
 	return func(node ast.Node) ast.Visitor {
 		if node == nil {
 			return nil
@@ -64,7 +127,26 @@ func docChecker(fset *token.FileSet, file string) schemaWalker {
 
 		k, ok := node.(*ast.KeyValueExpr)
 		if !ok {
-			return docChecker(fset, file)
+			return attributeCollector(res)
+		}
+		lit, ok := k.Key.(*ast.BasicLit)
+		if !ok {
+			return nil
+		}
+		*res = append(*res, lit.Value[1:len(lit.Value)-1])
+		return nil
+	}
+}
+
+func attributeChecker(fset *token.FileSet, file string, schema ast.Node) schemaWalker {
+	return func(node ast.Node) ast.Visitor {
+		if node == nil {
+			return nil
+		}
+
+		k, ok := node.(*ast.KeyValueExpr)
+		if !ok {
+			return attributeChecker(fset, file, schema)
 		}
 		lit, ok := k.Key.(*ast.BasicLit)
 		if !ok {
@@ -73,17 +155,17 @@ func docChecker(fset *token.FileSet, file string) schemaWalker {
 
 		vs, ok := k.Value.(*ast.CompositeLit)
 		if !ok {
-			return docChecker(fset, file)
+			return attributeChecker(fset, file, schema)
 		}
 
 		for _, check := range checks {
-			err := check(lit.Value, vs)
+			err := check(lit.Value, vs, schema)
 			if err != nil {
 				fmt.Printf("%s:%#v %s\n", strings.Replace(file, *providerPath, "", -1), fset.Position(node.Pos()).Line, err.Error())
 			}
 		}
 
-		return docChecker(fset, file)
+		return attributeChecker(fset, file, schema)
 	}
 }
 
@@ -99,7 +181,7 @@ func schemaChecker(fset *token.FileSet, file string) schemaWalker {
 		if c.Type == nil {
 			return schemaChecker(fset, file)
 		}
-		return docChecker(fset, file)
+		return attributeChecker(fset, file, c)
 	}
 }
 
